@@ -1,0 +1,119 @@
+
+service: cake-ordering-system
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: java11
+  region: eu-central-1
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:GetItem
+          Resource:
+            - arn:aws:dynamodb:eu-central-1:689085605570:table/ordersTable
+        - Effect: Allow
+          Action:
+            - kinesis:PutRecord
+          Resource:
+            - arn:aws:kinesis:eu-central-1:689085605570:stream/order-events
+        - Effect: Allow
+          Action:
+            - ses:SendEmail
+          Resource:
+            - "*"
+          Condition:
+            StringEquals:
+              ses:FromAddress:
+                - andrii.vodvud@smcebi.edu.pl
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+          Resource:
+            - arn:aws:sqs:eu-central-1:689085605570:deliveryServiceQueue
+
+package:
+  artifact: build/distributions/cake-ordering-system.zip
+
+functions:
+  create:
+    handler: com.serverless.CreateHandler
+    events:
+      - http:
+          path: /create
+          method: post
+    environment:
+      orderTableName: ordersTable
+      orderStreamName: order-events
+      AWS_XRAY_TRACING_NAME: 'Disabled'
+    timeout: 30
+  fulfill:
+    handler: com.serverless.FulfillHandler
+    events:
+      - http:
+          path: /order/fulfill
+          method: post
+    environment:
+      orderTableName: ordersTable
+      orderStreamName: order-events
+      AWS_XRAY_TRACING_NAME: 'Disabled'
+    timeout: 10
+  delivery:
+    handler: com.serverless.DeliveryHandler
+    events:
+      - http:
+          path: /order/delivery
+          method: post
+    environment:
+      orderTableName: ordersTable
+      orderStreamName: order-events
+      AWS_XRAY_TRACING_NAME: 'Disabled'
+    timeout: 10
+  notificationHandler:
+    handler: com.serverless.NotificationHandler
+    events:
+      - stream:
+          arn: arn:aws:kinesis:eu-central-1:689085605570:stream/order-events
+    environment:
+      region: eu-central-1
+      cakeProducerEmail: andvod10@gmail.com
+      orderingSystemEmail: andrii.vodvud@smcebi.edu.pl
+      deliveryCompanyQueue:
+        Ref: deliveryServiceQueue
+      orderTableName: ordersTable
+  notifyDeliveryCompany:
+    handler: com.serverless.NotifyDeliveryCompany
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - deliveryServiceQueue
+              - Arn
+          batchSize: 1
+
+resources:
+  Resources:
+    orderEventsStream:
+      Type: AWS::Kinesis::Stream
+      Properties:
+        Name: order-events
+        ShardCount: 1
+    orderTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ordersTable
+        AttributeDefinitions:
+          - AttributeName: "orderId"
+            AttributeType: "S"
+        KeySchema:
+          - AttributeName: "orderId"
+            KeyType: "HASH"
+        BillingMode: PAY_PER_REQUEST
+    deliveryServiceQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: deliveryServiceQueue
